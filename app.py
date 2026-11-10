@@ -170,6 +170,21 @@ def _ensembl_id(hit):
     return ensembl.get("gene") if isinstance(ensembl, dict) else None
 
 
+def _lookup(batch, scopes):
+    """MyGene.info lookup of symbols in one scope; returns {typed symbol: hit} for the genes found."""
+    hits = http("POST", f"{MYGENE_URL}/query", data={
+        "q": ",".join(batch), "scopes": scopes, "species": "human",
+        "fields": "symbol,entrezgene,ensembl.gene", "size": 1,
+    })
+    found = {}
+    for hit in hits:
+        query = str(hit.get("query", "")).upper()
+        if hit.get("notfound") or "entrezgene" not in hit or query in found:
+            continue
+        found[query] = hit
+    return found
+
+
 def validate_symbols(symbols):
     """Check symbols against MyGene.info (human genes).
 
@@ -181,16 +196,11 @@ def validate_symbols(symbols):
     valid, invalid, notes = {}, [], []
     for start in range(0, len(symbols), BATCH_SIZE):
         batch = symbols[start:start + BATCH_SIZE]
-        hits = http("POST", f"{MYGENE_URL}/query", data={
-            "q": ",".join(batch), "scopes": "symbol,alias", "species": "human",
-            "fields": "symbol,entrezgene,ensembl.gene", "size": 1,
-        })
-        found = set()
-        for hit in hits:
-            query = str(hit.get("query", "")).upper()
-            if hit.get("notfound") or "entrezgene" not in hit or query in found:
-                continue
-            found.add(query)
+        found = _lookup(batch, "symbol")                                   # official symbols first
+        rest = [sym for sym in batch if sym not in found]
+        if rest:
+            found.update(_lookup(rest, "alias"))                           # then aliases for what is left
+        for query, hit in found.items():
             official = str(hit.get("symbol", query)).upper()
             valid[query] = {"symbol": official, "entrez": str(hit["entrezgene"]), "ensembl": _ensembl_id(hit)}
             if official != query:
@@ -830,7 +840,7 @@ const lay = (extra) => Object.assign({margin:{l:10,r:20,t:30,b:40}, paper_bgcolo
 function bar(id, items, color, title, xtitle){
   const el=document.getElementById(id); if(!el||!items||!items.length) return;
   Plotly.newPlot(el,[{type:'bar',orientation:'h',x:items.map(i=>i.value).reverse(),y:items.map(i=>i.label).reverse(),marker:{color:color},text:items.map(i=>i.value).reverse(),textposition:'outside'}],
-    lay({title:{text:title,font:{size:15}},margin:{l:260,r:30,t:40,b:30},xaxis:{title:xtitle,dtick:1}}),cfg);
+    lay({title:{text:title,font:{size:15}},margin:{l:260,r:30,t:40,b:30},xaxis:Object.assign({title:xtitle,rangemode:'tozero',tickformat:'d'},Math.max(...items.map(i=>i.value))<=10?{dtick:1}:{})}),cfg);
 }
 bar('c_path', D.pathways, '#0f9488', 'Input genes in each enriched pathway', 'Number of input genes in the pathway');
 bar('c_dis', D.diseases, '#d4552f', 'Genes supporting each disease', 'Number of input genes linked to the disease');
